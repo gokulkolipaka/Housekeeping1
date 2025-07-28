@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Graviti Housekeeping Log App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f8f8f8; margin: 0; }
+    .container { max-width: 400px; margin: auto; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px #ccc; }
+    .logo { width: 170px; height: 66px; object-fit: contain; margin: 10px auto; display: block; border: 1px solid #eee; }
+    h2 { margin-top: 0; }
+    label { display: block; margin-top: 10px; }
+    input, select, button, textarea { width: 100%; padding: 8px; margin-top: 4px; border-radius: 4px; border: 1px solid #bbb; font-size: 1em; }
+    .admin-panel { background: #f3f3f9; padding: 10px; border-radius: 4px; margin-top: 15px; }
+    table { width: 100%; margin-top: 10px;}
+    td, th { border: 1px solid #bbb; padding: 4px 8px; font-size: 0.97em; }
+    .audit-log { font-size: 0.8em; }
+    .actions { text-align: right; }
+    .entry, .audit-view { background: #eee; margin: 5px 0; padding: 8px; border-radius: 5px;}
+  </style>
+</head>
+<body>
+  <div class="container" id="container">
+    <img src="logo.png" class="logo" onclick="chooseLogo()" id="logoImg" alt="Logo" style="cursor:pointer"/>
+    <input type="file" id="logoInput" style="display:none" accept="image/*" onchange="loadLogo(event)">
+    <div id="loginPanel">
+      <h2>Housekeeping Log - Login</h2>
+      <form onsubmit="return login();">
+        <label>Username <input id="loginUser" required autocomplete="username"></label>
+        <label>Password <input id="loginPass" type="password" required autocomplete="current-password"></label>
+        <button type="submit">Login</button>
+      </form>
+      <div><small>Default Admin: <b>admin / admin123</b></small></div>
+    </div>
+    <div id="mainPanel" style="display:none;">
+      <div style="text-align:center"><h2>Housekeeping Logs</h2></div>
+      <div id="userActions"></div>
+      <label for="logChoice">Select Log:</label>
+      <select id="logChoice" onchange="renderForm()">
+        <option value="PEST">PEST O FLASH</option>
+        <option value="CURTAIN">AIR CURTAIN</option>
+        <option value="RACKS">MONTHLY RACKS</option>
+      </select>
+      <div id="formPanel"></div>
+      <button onclick="logout()">Logout</button>
+    </div>
+  </div>
+  <script>
+    // Basic localstorage-based authentication
+    let USERS = JSON.parse(localStorage.getItem('users')||'null') || [{"username":"admin","password":"admin123","role":"admin"}];
+    let LOGO = localStorage.getItem('logo');
+    let AUDIT = JSON.parse(localStorage.getItem('audit')||'null')||[];
+    let LOGS = JSON.parse(localStorage.getItem('logs')||'null')||{PEST:[], CURTAIN:[], RACKS:[]};
+    let currentUser = null;
+    function chooseLogo(){ document.getElementById('logoInput').click(); }
+    function loadLogo(e){
+      let file = e.target.files[0],
+          reader = new FileReader();
+      reader.onload = function(evt){
+        document.getElementById('logoImg').src = evt.target.result;
+        localStorage.setItem('logo', evt.target.result);
+      };
+      if(file) reader.readAsDataURL(file);
+    }
+    if(LOGO) document.getElementById('logoImg').src = LOGO;
+    // Login
+    function login(){
+      let uname = loginUser.value.trim(),
+          pwd = loginPass.value;
+      let u = USERS.find(u=>u.username===uname && u.password===pwd);
+      if(!u){ alert("Login failed"); return false;}
+      currentUser = u;
+      document.getElementById('loginPanel').style.display='none';
+      document.getElementById('mainPanel').style.display='';
+      renderUserPanel();
+      renderForm();
+      return false;
+    }
+    function logout(){
+      currentUser = null;
+      document.getElementById('loginPanel').style.display='';
+      document.getElementById('mainPanel').style.display='none';
+    }
+    // User Admin Panel (only for admin)
+    function renderUserPanel(){
+      let out = document.getElementById('userActions');
+      if(currentUser.role!=='admin'){ out.innerHTML="Logged in as: "+currentUser.username; return; }
+      let table = `<div class='admin-panel'><b>User Management</b><table><tr><th>User</th><th>Role</th><th></th></tr>`;
+      USERS.forEach((u,i)=>{
+        if(u.username=='admin') table+=`<tr><td>${u.username} (default)</td><td>${u.role}</td><td></td></tr>`;
+        else table+=`<tr><td>${u.username}</td><td>${u.role}</td><td><button onclick="deleteUser(${i})">Delete</button></td></tr>`;
+      });
+      table += `</table>
+      <form onsubmit="return addUser()">
+        <label>Username:<input id="newU" required></label>
+        <label>Password:<input id="newP" required></label>
+        <label>Role:
+          <select id="newR">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <button type="submit">Add User</button>
+      </form></div>
+      <div>
+        <button onclick="viewAuditTrail()">View Audit Trail</button>
+        <button onclick="exportPDF()">Export All to PDF</button>
+        <button onclick="backupLogs()">Backup/Save Data</button>
+        <button onclick="loadBackup()">Load Backup</button>
+      </div>
+      `;
+      out.innerHTML=table;
+    }
+    function addUser(){
+      let u = newU.value.trim(), p = newP.value, r = newR.value;
+      if(!u||!p) return false;
+      if(USERS.find(x=>x.username===u)){alert("User exists");return false;}
+      USERS.push({username:u,password:p,role:r});
+      saveAll();
+      renderUserPanel();
+      auditTrail("addUser",{username:u,role:r});
+      return false;
+    }
+    function deleteUser(i){
+      let u = USERS[i];
+      if(u.username=='admin'){alert("Cannot delete admin");return;}
+      USERS.splice(i,1);
+      saveAll();
+      renderUserPanel();
+      auditTrail("deleteUser",{username:u.username});
+    }
+    // Log Forms
+    function renderForm(){
+      let val = logChoice.value;
+      document.getElementById('formPanel').innerHTML = window['render_'+val]();
+    }
+    // PEST O FLASH FORM
+    function render_PEST(){
+      // simplified for demo; full-table structure can be used as needed
+      return `
+      <form onsubmit="return submitLog('PEST')"><h3>PEST O FLASH CLEANING</h3>
+      <label>Date: <input type="date" id="pdate" required></label>
+      <label>Location: <input id="ploc" required></label>
+      <label>No. of Dead Insects: <input type="number" id="pdead" min="0"></label>
+      <label>Cleaned By: <input id="pcleaner" required></label>
+      <label>Checked By: <input id="pverif" required></label>
+      <label>Remarks: <textarea id="premark"></textarea></label>
+      <button>Save Log</button>
+      </form>` + renderLogsTable('PEST');
+    }
+    // AIR CURTAIN FORM
+    function render_CURTAIN(){
+      return `
+      <form onsubmit="return submitLog('CURTAIN')"><h3>AIR CURTAIN CLEANING</h3>
+      <label>Date: <input type="date" id="cdate" required></label>
+      <label>Location: <input id="cloc" required></label>
+      <label>Cleaned By: <input id="ccleaner" required></label>
+      <label>Checked By: <input id="cverif" required></label>
+      <label>Remarks: <textarea id="cremark"></textarea></label>
+      <button>Save Log</button>
+      </form>` + renderLogsTable('CURTAIN');
+    }
+    // STORAGE RACKS FORM
+    function render_RACKS(){
+      let months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      let html=`<form onsubmit="return submitLog('RACKS')"><h3>MONTHLY CLEANING OF RACKS</h3>
+      <label>Area Name: <input id="rname" required></label>
+      <label>Month: 
+        <select id="rmonth" required>
+          ${months.map(m=>`<option value="${m}">${m}</option>`).join('')}
+        </select>
+      </label>
+      <label>Date: <input type="date" id="rdate" required></label>
+      <label>Done By: <input id="rdone" required></label>
+      <label>Verified By: <input id="rverif" required></label>
+      <label>Remarks: <textarea id="rremark"></textarea></label>
+      <button>Save Log</button>
+      </form>` + renderLogsTable('RACKS');
+      return html;
+    }
+    // Render logs and PDF/backup/audit options
+    function renderLogsTable(type){
+      let logs = LOGS[type]||[];
+      let html='<table><tr><th>Date</th><th>Location/Area</th><th>User</th><th>Remarks</th></tr>';
+      logs.forEach(e=>{html+=`<tr><td>${e.date||''}</td><td>${e.loc||e.name||''}</td><td>${e.user}</td><td>${e.remarks}</td></tr>`;})
+      html+='</table>';
+      html+=`<div class="actions"><button onclick="exportPDF('${type}')">Export to PDF</button> <button onclick="backupLogs('${type}')">Save as File</button></div>`;
+      return html;
+    }
+    // Save logs function
+    function submitLog(type){
+      let log={}, d = new Date().toISOString();
+      if(type==='PEST'){
+        log = {date:pdate.value,loc:ploc.value,dead:pdead.value,cleaned:pcleaner.value,checked:pverif.value,remarks:premark.value,user:currentUser.username,time:d};
+      } else if(type==='CURTAIN'){
+        log = {date:cdate.value,loc:cloc.value,cleaned:ccleaner.value,checked:cverif.value,remarks:cremark.value,user:currentUser.username,time:d};
+      } else if(type==='RACKS'){
+        log = {name:rname.value,month:rmonth.value,date:rdate.value,done:rdone.value,checked:rverif.value,remarks:rremark.value,user:currentUser.username,time:d};
+      }
+      LOGS[type]=LOGS[type]||[]; LOGS[type].push(log);
+      saveAll();
+      auditTrail("addLog",log);
+      renderForm();
+      alert("Entry saved!");
+      return false;
+    }
+    function saveAll(){
+      localStorage.setItem('users',JSON.stringify(USERS));
+      localStorage.setItem('logs',JSON.stringify(LOGS));
+      localStorage.setItem('audit',JSON.stringify(AUDIT));
+    }
+    // Audit Trail (naive approach: append to array, log each field change)
+    function auditTrail(action, details){
+      let entry = {user:currentUser?currentUser.username:'', role:currentUser?currentUser.role:'', date:new Date().toISOString(), action, details};
+      AUDIT.push(entry); saveAll();
+    }
+    function viewAuditTrail(){
+      let filt = prompt("Enter username or date (YYYY or YYYY-MM or YYYY-MM-DD) to filter audit. Leave blank for all.");
+      let rows = AUDIT.filter(r=>!filt || r.user.includes(filt)||r.date.startsWith(filt));
+      let html = `<div class="audit-view"><h3>Audit Trail</h3>`;
+      rows.forEach(r=>{
+        html += `<div class='audit-log'><b>${r.date}</b> ${r.user}[${r.role}] - [${r.action}] <br>Details: ${JSON.stringify(r.details)}</div>`;
+      });
+      html+="<button onclick='this.parentNode.remove()'>Close</button></div>";
+      document.body.insertAdjacentHTML('beforeend',html);
+    }
+    // PDF Export (simple, uses browser print-to-pdf)
+    function exportPDF(type){
+      let data = type? LOGS[type]:LOGS;
+      let win = window.open("","_blank");
+      win.document.write(`<h2>Housekeeping Logs: ${type||'ALL'}</h2><pre>${JSON.stringify(data,null,2)}</pre><h3>Audit Trail</h3><pre>${JSON.stringify(AUDIT,null,2)}</pre>`);
+      win.print();
+    }
+    // Export data as JSON file for backup
+    function backupLogs(type){
+      let data = (type? LOGS[type]:LOGS);
+      let a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
+      a.download = type? (type+"_logs.json"):"all_logs.json";
+      a.click();
+    }
+    function loadBackup(){
+      let f = document.createElement('input');
+      f.type="file";
+      f.accept="application/json";
+      f.onchange=function(e){
+        let file = e.target.files[0], reader = new FileReader();
+        reader.onload = function(evt){
+          let logs = JSON.parse(evt.target.result);
+          LOGS = logs;
+          saveAll(); renderForm();
+        };
+        reader.readAsText(file);
+      }
+      f.click();
+    }
+    // Init if page loads and user is already remembered
+    if(currentUser){
+      document.getElementById('loginPanel').style.display='none';
+      document.getElementById('mainPanel').style.display='';
+      renderUserPanel(); renderForm();
+    }
+  </script>
+</body>
+</html>
